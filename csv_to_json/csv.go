@@ -46,8 +46,6 @@ const (
 
 func main() {
 	kong.Parse(&cli)
-	marshal, _ := json.MarshalIndent(cli, "", "\t")
-	fmt.Printf("%s", marshal)
 
 	m := parseFieldConversionTypes(cli.Convert)
 
