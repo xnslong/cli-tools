@@ -3,11 +3,9 @@ package main
 import (
 	"encoding/csv"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
-	sort2 "sort"
 
 	"github.com/alecthomas/kong"
 )
@@ -25,7 +23,7 @@ var cli struct {
 
 	In        string   `name:"input-file" short:"i" help:"input file, \"-\" for standard input" default:"-"`
 	Out       string   `name:"output-file" short:"o" help:"output file, \"-\" for standard output" default:"-"`
-	FieldType []string `name:"field-type" short:"t" help:"to specify the type of the field, in format <field>=<type>, means the field should be converted to the target type, available types are bool, int, float, str, if not set, it will not do conversion, just keep the original str type"`
+	FieldType []string `name:"field-type" short:"t" help:"to specify the type of the field, in format <field>=<type>, means the field should be converted to the target type, available types are bool (b), int (i), float (f), string (str, s), if not set, it will not do conversion, just keep the original str type"`
 	Format    string   `name:"separator" short:"s" help:"file type: csv fields separated by comma, tsv fields separated by tab" enum:"csv,tsv" default:"csv"`
 }
 
@@ -71,115 +69,56 @@ func main() {
 		convertToJson(reader, outFile)
 	case "sort":
 		sortCsv(reader, outFile)
+	case "extract":
+		extract(reader, outFile)
 	}
 }
 
-type CsvInfo struct {
-	header  []string
-	Records []CsvRecord
-}
+func extract(reader *csv.Reader, file io.WriteCloser) {
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
 
-type CsvRecord struct {
-	Fields []string
-}
+	title, err := reader.Read()
+	colIdx := getColIndex(title)
 
-func sortCsv(reader *csv.Reader, out io.Writer) error {
-	csvInfo, err := readCsv(reader)
-	requireNoError(err, "sortCsv error")
-
-	sort(csvInfo)
-
-	writeCsv(csvInfo, out)
-
-	return nil
-}
-
-func writeCsv(info *CsvInfo, out io.Writer) {
-	writer := csv.NewWriter(out)
-	writer.Write(info.header)
-
-	for _, record := range info.Records {
-		writer.Write(record.Fields)
+	idx := make([]int, 0, len(cli.Extract.Fields))
+	for _, name := range cli.Extract.Fields {
+		idx = append(idx, colIdx[name])
 	}
 
-	writer.Flush()
-}
-
-func sort(info *CsvInfo) {
-	var fieldIdx map[string]int = make(map[string]int)
-	for idx, name := range info.header {
-		fieldIdx[name] = idx
-	}
-
-	var comparators []comparator
-	for _, field := range cli.Sort.Fields {
-		comparators = append(comparators, cmpField(info.Records, fieldIdx[field], m[field]))
-	}
-	cmp := seqCmp(comparators...)
-	if cli.Sort.Reverse {
-		cmp = reverse(cmp)
-	}
-
-	sort2.Slice(info.Records, func(i, j int) bool {
-		return cmp(i, j) <= 0
-	})
-}
-
-func cmpField(rec []CsvRecord, idx int, fType jType) comparator {
-	return func(i, j int) int {
-		v1, err := convType(rec[i].Fields[idx], fType)
-		requireNoError(err, "index: %d, value: %s convert to %s error", idx, rec[i].Fields[idx], fType)
-
-		v2, err := convType(rec[j].Fields[idx], fType)
-		requireNoError(err, "index: %d, value: %s convert to %s error", idx, rec[j].Fields[idx], fType)
-
-		switch fType {
-		case jTypeBool:
-			return cmpValue(boolAsInt(v1.(bool)), boolAsInt(v2.(bool)))
-		case jTypeInt:
-			return cmpValue(v1.(int64), v2.(int64))
-		case jTypeFloat:
-			return cmpValue(v1.(float64), v2.(float64))
-		case jTypeStr:
-			return cmpValue(v1.(string), v2.(string))
-		default:
-			log.Fatalf("unsupported field type: %s", fType)
-			return 0
-		}
-	}
-}
-
-func requireNoError(err error, format string, args ...any) {
+	out := extractFields(title, idx)
+	err = writer.Write(out)
 	if err != nil {
-		log.Fatal(fmt.Sprintf(format, args...), err)
+		log.Fatalf("write csv error: %v", err)
 	}
-}
-
-func readCsv(in *csv.Reader) (*CsvInfo, error) {
-	in.ReuseRecord = false
-
-	info := &CsvInfo{}
-
-	rec, err := in.Read()
-	if err != nil {
-		return nil, err
-	}
-
-	info.header = rec
 
 	for {
-		rec, err := in.Read()
-		if errors.Is(err, io.EOF) {
-			break
+		record, err := reader.Read()
+		if err == io.EOF {
+			return
 		}
 		if err != nil {
-			return nil, err
+			log.Fatalf("read csv error: %v", err)
 		}
-		info.Records = append(info.Records, CsvRecord{Fields: rec})
+
+		out := extractFields(record, idx)
+
+		err = writer.Write(out)
+		if err != nil {
+			log.Fatalf("write csv error: %v", err)
+		}
 	}
 
-	return info, nil
+}
 
+func extractFields(rec []string, idx []int) []string {
+	result := make([]string, 0, len(idx))
+
+	for _, i := range idx {
+		result = append(result, rec[i])
+	}
+
+	return result
 }
 
 func convertToJson(reader *csv.Reader, out io.Writer) {
