@@ -1,4 +1,4 @@
-module github.com/xnslong/cli-tools/csv_to_json
+module github.com/xnslong/cli-tools/csv
 
 go 1.18
 
